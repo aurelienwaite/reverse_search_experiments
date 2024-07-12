@@ -11,12 +11,12 @@ import subprocess
 from os import mkdir
 
 num_classes = 10
-num_directions = 99
+num_directions = 4
 proj_dim = num_directions + 1
 rs = np.random.RandomState(42)
 np.random.set_state(rs.get_state())
 rng = np.random.default_rng()
-experiment_name = "exp5"
+experiment_name = "exp6"
 num_polylearn_states = 10
 
 mndata = MNIST("/Users/rorywaite/code/polylearn/mnist_rs/data")
@@ -58,18 +58,35 @@ def accuracy(test_params):
     return np.equal(maximised, training_labels).sum() / len(maximised)
 
 
-def make_projection(params):
+def make_projection(params, direction_weights):
     dir_shape = [num_directions, num_classes * img_size]
     # directions_noise = rng.standard_normal(
     #    size=dir_shape, dtype="float64"
     # )  # + np.ones(shape=dir_shape, dtype='float64')
     # directions = directions_noise  # + directions
-    one_hots = np.random.choice(img_size * num_classes, size=num_directions, replace=False)
+    total_weight = sum(direction_weights)
+    weight_bins = [direction_weights[0] / total_weight]
+    for weight in direction_weights[1:]:
+        weight_bins.append(weight_bins[-1] + weight / total_weight)
+    with open(f"{experiment_name}/bins.json", "a") as bins_file:
+        print(json.dumps(weight_bins), file=bins_file)
+    one_hots = []
+    while len(one_hots) < num_directions:
+        dir_sample = np.random.uniform()
+        one_hot = 0
+        while dir_sample > weight_bins[one_hot]:
+            one_hot += 1
+        if one_hot not in one_hots:
+            one_hots.append(one_hot)
+    with open(f"{experiment_name}/dir_samples.json", "a") as one_hots_file:
+        print(json.dumps(one_hots), file=one_hots_file)
+
+    #one_hots = np.random.choice(img_size * num_classes, size=num_directions, replace=False)
     directions = np.zeros(dir_shape, dtype="float64")
     for i, one_hot in enumerate(one_hots):
         directions[i, one_hot] = 1.0
     projection = np.concatenate([directions, np.expand_dims(params, 0)], axis=0)
-    return projection
+    return projection, one_hots
 
 
 def make_projected(projection):
@@ -181,17 +198,23 @@ def log_iteration(params, iteration):
     with open(f"{experiment_name}/params.txt", "a") as params_file:
         params_file.write(json.dumps(params.tolist()) + "\n")
 
+def update_direction_weights(weights, one_hots, accuracy_diff):
+    for one_hot in one_hots:
+        weights[one_hot] += weights[one_hot] + accuracy_diff
+    return weights
 
 params = param = rng.standard_normal(size=[num_classes * img_size], dtype="float64")
 prev_full_set_acc = 0
+direction_weights = [0.1] * (img_size * num_classes)
 for i in range(10000):
-    projection = make_projection(params)
+    projection, one_hots = make_projection(params, direction_weights)
     projected, sampled_labels = make_projected(projection)
     write_polytopes_file(projected, sampled_labels, i)
     run_exectuable(i)
     full_set_accuracy, updated_params = update_params(i)
     if full_set_accuracy > prev_full_set_acc:
         params = updated_params
+        direction_weights = update_direction_weights(direction_weights, one_hots, full_set_accuracy - prev_full_set_acc)
         prev_full_set_acc = full_set_accuracy
     else:
         print("params are no better than previous iteration")
