@@ -8,15 +8,16 @@ import pyarrow.parquet as pq
 from scipy import sparse
 import matplotlib.pyplot as plt
 import subprocess
+from os import mkdir
 
 num_classes = 10
-num_directions = 4
+num_directions = 99
 proj_dim = num_directions + 1
 rs = np.random.RandomState(42)
 np.random.set_state(rs.get_state())
 rng = np.random.default_rng()
-experiment_name = "exp1"
-num_polylearn_states = 50
+experiment_name = "exp5"
+num_polylearn_states = 10
 
 mndata = MNIST("/Users/rorywaite/code/polylearn/mnist_rs/data")
 images, labels = mndata.load_training()
@@ -36,14 +37,17 @@ print(training_set_by_label[0].dtype)
 num_images, img_size = np.shape(training_set)
 sample_size = num_images // 300
 
+mkdir(experiment_name)
+
+
 def polytope_table_file(iteration):
-    return f"mnist_iter_{iteration}.parquet"
+    return f"{experiment_name}/mnist_iter_{iteration}.parquet"
 
 def states_file(iteration):
-    return f"states_out_iter_{iteration}.jsonl"
+    return f"{experiment_name}/states_out_iter_{iteration}.jsonl"
 
 def labels_file(iteration):
-    return f"./labels_iter_{iteration}.json"
+    return f"{experiment_name}/labels_iter_{iteration}.json"
 
 
 def accuracy(test_params):
@@ -56,18 +60,21 @@ def accuracy(test_params):
 
 def make_projection(params):
     dir_shape = [num_directions, num_classes * img_size]
-    directions_noise = rng.standard_normal(
-        size=dir_shape, dtype="float64"
-    )  # + np.ones(shape=dir_shape, dtype='float64')
-    directions = directions_noise  # + directions
+    # directions_noise = rng.standard_normal(
+    #    size=dir_shape, dtype="float64"
+    # )  # + np.ones(shape=dir_shape, dtype='float64')
+    # directions = directions_noise  # + directions
+    one_hots = np.random.choice(img_size * num_classes, size=num_directions, replace=False)
+    directions = np.zeros(dir_shape, dtype="float64")
+    for i, one_hot in enumerate(one_hots):
+        directions[i, one_hot] = 1.0
     projection = np.concatenate([directions, np.expand_dims(params, 0)], axis=0)
     return projection
 
 
 def make_projected(projection):
-    sample_indices = [
-        i for i in range(sample_size)
-    ]  # np.random.choice(num_images, size=sample_size, replace=False)
+    sample_indices = np.random.choice(num_images, size=sample_size, replace=False)
+    #sample_indices = list(range(num_images))
     samples = []
     for index in sample_indices:
         samples.append((labels[index], images[index]))
@@ -133,12 +140,13 @@ def update_params(iteration):
         scored.append((full_set_accuracy, state["accuracy"], new_params))
     scored.sort(key=lambda x: x[0], reverse=True)
 
-    with open(f"{experiment_name}_scores_log.jsonl", "a") as scores_file:
+    with open(f"{experiment_name}/scores_log.jsonl", "a") as scores_file:
         scores_file.write(
-            json.dumps([{"full_set": item[0], "sample": item[1]} for item in scored])
+            json.dumps([{"full_set": item[0], "sample": item[1]} for item in scored]) + "\n"
         )
 
-    return scored[0][2]
+    best = scored[0]
+    return best[0], best[2]
 
 
 def run_exectuable(iteration):
@@ -166,15 +174,25 @@ def run_exectuable(iteration):
     cp.check_returncode()
 
 def log_iteration(params, iteration):
-    accuracy = accuracy(params)
-    with open(f"{experiment_name}_log.txt", "a") as log_file:
-        print(f"Finished iteration {iteration} with accuracy {accuracy}", file=log_file)
+    full_set_accuracy = accuracy(params)
+    with open(f"{experiment_name}/log.txt", "a") as log_file:
+        print(f"Finished iteration {iteration} with accuracy {full_set_accuracy}", file=log_file)
+
+    with open(f"{experiment_name}/params.txt", "a") as params_file:
+        params_file.write(json.dumps(params.tolist()) + "\n")
 
 
 params = param = rng.standard_normal(size=[num_classes * img_size], dtype="float64")
-for i in range(1000):
+prev_full_set_acc = 0
+for i in range(10000):
     projection = make_projection(params)
-    projected, labels = make_projected(projection)
-    write_polytopes_file(projected, labels, i)
+    projected, sampled_labels = make_projected(projection)
+    write_polytopes_file(projected, sampled_labels, i)
     run_exectuable(i)
-    params = update_params(i)
+    full_set_accuracy, updated_params = update_params(i)
+    if full_set_accuracy > prev_full_set_acc:
+        params = updated_params
+        prev_full_set_acc = full_set_accuracy
+    else:
+        print("params are no better than previous iteration")
+    log_iteration(params, i)
