@@ -9,15 +9,19 @@ from scipy import sparse
 import matplotlib.pyplot as plt
 import subprocess
 from os import mkdir
+import cProfile
+import time
+import datetime
+
 
 num_classes = 10
-num_directions = 4
+num_directions = 999
 proj_dim = num_directions + 1
 rs = np.random.RandomState(42)
 np.random.set_state(rs.get_state())
 rng = np.random.default_rng()
-experiment_name = "exp6"
-num_polylearn_states = 10
+experiment_name = "exp7"
+num_polylearn_states = 5
 
 mndata = MNIST("/Users/rorywaite/code/polylearn/mnist_rs/data")
 images, labels = mndata.load_training()
@@ -64,25 +68,36 @@ def make_projection(params, direction_weights):
     #    size=dir_shape, dtype="float64"
     # )  # + np.ones(shape=dir_shape, dtype='float64')
     # directions = directions_noise  # + directions
-    total_weight = sum(direction_weights)
-    weight_bins = [direction_weights[0] / total_weight]
-    for weight in direction_weights[1:]:
-        weight_bins.append(weight_bins[-1] + weight / total_weight)
-    with open(f"{experiment_name}/bins.json", "a") as bins_file:
-        print(json.dumps(weight_bins), file=bins_file)
-    one_hots = []
-    while len(one_hots) < num_directions:
-        dir_sample = np.random.uniform()
-        one_hot = 0
-        while dir_sample > weight_bins[one_hot]:
-            one_hot += 1
-        if one_hot not in one_hots:
-            one_hots.append(one_hot)
-    with open(f"{experiment_name}/dir_samples.json", "a") as one_hots_file:
-        print(json.dumps(one_hots), file=one_hots_file)
+    #copied_weights = list(direction_weights)
+    #def make_bins():
+    #    total_weight = sum(copied_weights)
+    #    weight_bins = [copied_weights[0] / total_weight]
+    #    for weight in copied_weights[1:]:
+    #        weight_bins.append(weight_bins[-1] + weight / total_weight)
+    #    return weight_bins
+    
+    #with open(f"{experiment_name}/bins.json", "a") as bins_file:
+    #    print(json.dumps(make_bins()), file=bins_file)
+    #one_hots = []
+    #while len(one_hots) < num_directions:
+    #    bins = make_bins()
+    #    dir_sample = np.random.uniform()
+    #    one_hot = 0
+    #    while dir_sample > bins[one_hot]:
+    #        one_hot += 1
+    #    copied_weights.pop(one_hot)
+    #    for prev_one_hot in one_hots:
+    #        if one_hot >= prev_one_hot:
+    #            one_hot += 1
+    #    assert one_hot not in one_hots
+    #    one_hots.append(one_hot)
+    #    one_hots.sort()
+    #with open(f"{experiment_name}/dir_samples.json", "a") as one_hots_file:
+    #    print(json.dumps(one_hots), file=one_hots_file)
 
     #one_hots = np.random.choice(img_size * num_classes, size=num_directions, replace=False)
     directions = np.zeros(dir_shape, dtype="float64")
+    one_hots = np.random.choice(img_size * num_classes, size=num_directions, replace=False)
     for i, one_hot in enumerate(one_hots):
         directions[i, one_hot] = 1.0
     projection = np.concatenate([directions, np.expand_dims(params, 0)], axis=0)
@@ -192,8 +207,9 @@ def run_exectuable(iteration):
 
 def log_iteration(params, iteration):
     full_set_accuracy = accuracy(params)
+    timestamp = datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')
     with open(f"{experiment_name}/log.txt", "a") as log_file:
-        print(f"Finished iteration {iteration} with accuracy {full_set_accuracy}", file=log_file)
+        print(f"{timestamp} Finished iteration {iteration} with accuracy {full_set_accuracy}", file=log_file)
 
     with open(f"{experiment_name}/params.txt", "a") as params_file:
         params_file.write(json.dumps(params.tolist()) + "\n")
@@ -206,16 +222,20 @@ def update_direction_weights(weights, one_hots, accuracy_diff):
 params = param = rng.standard_normal(size=[num_classes * img_size], dtype="float64")
 prev_full_set_acc = 0
 direction_weights = [0.1] * (img_size * num_classes)
+
 for i in range(10000):
-    projection, one_hots = make_projection(params, direction_weights)
-    projected, sampled_labels = make_projected(projection)
-    write_polytopes_file(projected, sampled_labels, i)
-    run_exectuable(i)
-    full_set_accuracy, updated_params = update_params(i)
-    if full_set_accuracy > prev_full_set_acc:
-        params = updated_params
-        direction_weights = update_direction_weights(direction_weights, one_hots, full_set_accuracy - prev_full_set_acc)
-        prev_full_set_acc = full_set_accuracy
-    else:
-        print("params are no better than previous iteration")
-    log_iteration(params, i)
+    with cProfile.Profile() as pr:
+        projection, one_hots = make_projection(params, direction_weights)
+        projected, sampled_labels = make_projected(projection)
+        write_polytopes_file(projected, sampled_labels, i)
+        run_exectuable(i)
+        full_set_accuracy, updated_params = update_params(i)
+        if full_set_accuracy > prev_full_set_acc:
+            params = updated_params
+            if i > 0:
+                direction_weights = update_direction_weights(direction_weights, one_hots, full_set_accuracy - prev_full_set_acc)
+            prev_full_set_acc = full_set_accuracy
+        else:
+            print("params are no better than previous iteration")
+        log_iteration(params, i)
+        pr.dump_stats(f"{experiment_name}/stats_{i}.txt")
