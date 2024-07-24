@@ -20,9 +20,9 @@ proj_dim = num_directions + 1
 rs = np.random.RandomState(42)
 np.random.set_state(rs.get_state())
 rng = np.random.default_rng()
-experiment_name = "exp10"
+experiment_name = "exp11"
 params_file = f"{experiment_name}/params.txt"
-num_polylearn_states = 100
+num_polylearn_states = 1
 
 mndata = MNIST("../../mnist_rs/data")
 images, labels = mndata.load_training()
@@ -40,7 +40,7 @@ training_set_by_label = [np.array(ary) for ary in images_by_label]
 print(training_set_by_label[0].dtype)
 
 num_images, img_size = np.shape(training_set)
-sample_size = num_images // 300
+sample_size = num_images // 1
 
 
 def polytope_table_file(iteration):
