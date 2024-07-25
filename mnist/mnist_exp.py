@@ -16,13 +16,13 @@ from tenacity import retry, stop_after_attempt
 
 num_classes = 10
 num_directions = 9
-proj_dim = num_directions + 1
+#proj_dim = num_directions + 1
 rs = np.random.RandomState(42)
 np.random.set_state(rs.get_state())
 rng = np.random.default_rng()
-experiment_name = "exp11"
+experiment_name = "exp12"
 params_file = f"{experiment_name}/params.txt"
-num_polylearn_states = 1
+num_polylearn_states = 10
 
 mndata = MNIST("../../mnist_rs/data")
 images, labels = mndata.load_training()
@@ -40,8 +40,8 @@ training_set_by_label = [np.array(ary) for ary in images_by_label]
 print(training_set_by_label[0].dtype)
 
 num_images, img_size = np.shape(training_set)
-sample_size = num_images // 1
-
+sample_size = num_images // 300
+input_size = img_size + 1 # Including bias term
 
 def polytope_table_file(iteration):
     return f"{experiment_name}/mnist_iter_{iteration}.parquet"
@@ -56,18 +56,18 @@ def labels_file(iteration):
 def accuracy(test_params):
     reshaped_new_params = test_params.reshape((num_classes, -1))
     print(reshaped_new_params.shape, training_set.shape)
-    poly_scores = training_set @ reshaped_new_params.transpose()
+    with_bias = np.concat([training_set, np.ones([num_images, 1])], dtype="float64", axis=1)
+    poly_scores = with_bias @ reshaped_new_params.transpose()
     maximised = poly_scores.argmax(axis=1)
     return np.equal(maximised, training_labels).sum() / len(maximised)
 
 
 def make_projection(params, sampled_images, sampled_labels):
-    dir_shape = [num_directions, num_classes * img_size]
 
     non_zeros = {}
-    for i in range(img_size):
+    for i in range(input_size):
         for image, label in zip(sampled_images, sampled_labels):
-            if image[i] != 0:
+            if i==img_size or image[i] != 0:
                 by_label = non_zeros.get(label, {})
                 non_zeros[label] = by_label
                 by_label[i] = by_label.get(i, 0) + 1
@@ -85,30 +85,20 @@ def make_projection(params, sampled_images, sampled_labels):
     while len(one_hots) < num_directions:
         img_class = np.random.randint(0, num_classes)
         weights, mappings = make_weighted(img_class)
-        dir_sample = np.random.uniform()
-        for i, weight in enumerate(weights):
-            if dir_sample < weight:
-                one_hot = mappings[i] + img_class * img_size
-                if one_hot not in one_hots:
-                    one_hots.append(one_hot)
-                break
 
-                
-               
-    """     subspace_img_size = len(non_zeros)
-    subspace_one_hots = np.random.choice(subspace_img_size * num_classes, size=num_directions, replace=False).tolist()
-    one_hots = [non_zeros[i % subspace_img_size] + (i // subspace_img_size) * img_size for i in subspace_one_hots]
-    print(subspace_img_size, subspace_img_size / img_size, non_zeros[210])
-    print(non_zeros)
-    print(subspace_one_hots, one_hots, [non_zeros[i % num_classes] for i in subspace_one_hots]) """
+        #dir_sample = np.random.uniform()
+        #for i, weight in enumerate(weights):
+        #    if dir_sample < weight:
+        #        one_hot = mappings[i] + img_class * input_size
+        one_hot = mappings[np.random.randint(0, len(mappings))] + img_class * input_size
+        if one_hot not in one_hots:
+            one_hots.append(one_hot)
 
-    """for one_hot in one_hots:
-        count = 0
-        for img in sampled_images:
-            if img[one_hot % img_size] != 0:
-                count += 1
-        print (one_hot % img_size, count)"""
-
+    #for cls in range(num_classes):
+    #    bias_index = cls * input_size + img_size
+    #    if bias_index not in one_hots:
+    #        one_hots.append(bias_index)
+    dir_shape = [len(one_hots), num_classes * input_size]
     directions = np.zeros(dir_shape, dtype="float64")
     for i, one_hot in enumerate(one_hots):
         directions[i, one_hot] = 1.0
@@ -126,18 +116,20 @@ def make_samples():
         samples.append((labels[index], images[index]))
 
     sampled_labels, sampled_images = (np.array(ary) for ary in zip(*samples))
-    return sampled_labels, sampled_images
+    with_bias = np.concat([sampled_images, np.ones([sample_size, 1], dtype="float64")], axis=1)
+    return sampled_labels, with_bias
 
 def make_projected(projection, sampled_images):
     # projected = training_set[sample_indices, :] @ reshaped
     # Because the feature vector is mostly sparse, we reshape our projection matrix
-    reshaped = projection.transpose().reshape([num_classes, img_size, -1])
+    reshaped = projection.transpose().reshape([num_classes, input_size, -1])
+    print(sampled_images.shape)
     projected = sampled_images @ reshaped
     return projected
 
 
 def write_polytopes_file(projected, labels, iteration):
-    print(projected.shape)
+    proj_dim = projected.shape[-1]
     with open(f"{experiment_name}/projected_dump.json", "w") as dump:
         json.dump(projected.tolist(), dump, indent=2)
     polytopes = projected.transpose([1, 0, 2]).reshape([-1])
@@ -154,7 +146,6 @@ def write_polytopes_file(projected, labels, iteration):
     with open(labels_file(iteration), "w") as label_file:
         json.dump(labels.tolist(), label_file)
 
-    print(len(polytope_index), len(vertex_index), len(dim), len(polytopes))
     polytope_table = pa.table(
         {
             "polytope": polytope_index,
@@ -232,7 +223,7 @@ def log_iteration(params, iteration):
         params_file_obj.write(json.dumps(params.tolist()) + "\n")
 
 
-params = param = rng.standard_normal(size=[num_classes * img_size], dtype="float64")
+params = param = rng.standard_normal(size=[num_classes * input_size], dtype="float64")
 prev_full_set_acc = 0
 start_index = 0
 try: 
