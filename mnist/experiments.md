@@ -7,3 +7,7 @@
 7. Using a sampled 200 training set without replacement, 999 directions, coordinate descent, gaussian initilisation, 5 num states
 8. Using a sampled 200 training set without replacement, 9 directions, coordinate descent, gaussian initilisation, 100 num states
 9. Using a sampled 200 training set without replacement, 99 directions, coordinate descent, gaussian initilisation, 100 num states
+10. Using a sampled 200 training set without replacement, 99 directions, coordinate descent, gaussian initilisation, 100 num states, categorical sampled directions
+11. Using all training set without replacement, 9 directions, coordinate descent, gaussian initilisation, 1 num states
+12. Using a sampled 200 training set without replacement, 9 directions, coordinate descent, gaussian initilisation, 10 num states, bias, filtered directions
+13. Using a sampled 200 training set without replacement, 24 directions, coordinate descent, gaussian initilisation, 10 num states, bias, filtered directions

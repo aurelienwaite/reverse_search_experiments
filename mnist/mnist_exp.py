@@ -15,12 +15,12 @@ import datetime
 from tenacity import retry, stop_after_attempt
 
 num_classes = 10
-num_directions = 9
+num_directions = 24
 #proj_dim = num_directions + 1
 rs = np.random.RandomState(42)
 np.random.set_state(rs.get_state())
 rng = np.random.default_rng()
-experiment_name = "exp12"
+experiment_name = "exp13"
 params_file = f"{experiment_name}/params.txt"
 num_polylearn_states = 10
 
@@ -55,7 +55,6 @@ def labels_file(iteration):
 
 def accuracy(test_params):
     reshaped_new_params = test_params.reshape((num_classes, -1))
-    print(reshaped_new_params.shape, training_set.shape)
     with_bias = np.concat([training_set, np.ones([num_images, 1])], dtype="float64", axis=1)
     poly_scores = with_bias @ reshaped_new_params.transpose()
     maximised = poly_scores.argmax(axis=1)
