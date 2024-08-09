@@ -78,9 +78,19 @@ for batch in features.to_arrow().to_batches():
 def mean_average_error(test_params: npt.NDArray[np.float64], to_score: npt.NDArray[np.float64] = train_features_np, response_subset: npt.NDArray[np.float64] = response):
     reshaped_new_params = test_params.reshape((num_classes, -1))
     poly_scores = to_score @ reshaped_new_params.transpose()
+    maximiser_batch_size = 10000 # Selecting maxes takes a lot of memory
     maximised = poly_scores.argmax(axis=1)
-    print("Computing maximisers")
-    mae = np.abs(response_subset - clusters[maximised]).mean()
+    batches = []
+    end_range = len(maximised) // maximiser_batch_size
+    for batch_num in range(end_range):
+        start = batch_num * maximiser_batch_size
+        end = (batch_num + 1) * maximiser_batch_size
+        batches.append(clusters[maximised[start:end]])
+    end_index = end_range * maximiser_batch_size
+    remainder = end_index + (len(maximised) % maximiser_batch_size)
+    batches.append(clusters[maximised[end_index:remainder]])
+    predictions = np.concatenate(batches, axis=0)
+    mae = np.abs(response_subset.squeeze() - predictions).mean()
     return mae
 
 def make_projection(params: npt.NDArray[np.float64], sampled_rows: npt.NDArray[np.float64]):
@@ -168,16 +178,17 @@ def update_params(iteration, projection):
         print("Computing MAE")
         full_set_accuracy = mean_average_error(updated)
         print(full_set_accuracy)
-        scored.append((full_set_accuracy, new_params))
-    scored.sort(key=lambda x: x[0], reverse=True)
+        scored.append((full_set_accuracy, updated))
+    scored.sort(key=lambda x: x[0])
 
     with open(f"{experiment_name}/scores_log.jsonl", "a") as scores_file:
         scores_file.write(
-            json.dumps([{"full_set": item[0], "sample": item[1]} for item in scored]) + "\n"
+            json.dumps([{"full_set": item[0]} for item in scored]) + "\n"
         )
 
     best = scored[0]
-    return best[0], best[2]
+    print(f"Best score {best[0]}")
+    return best[0], best[1]
 
 
 def run_exectuable(iteration):
