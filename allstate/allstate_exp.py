@@ -13,11 +13,11 @@ import datetime
 from tenacity import retry, stop_after_attempt
 from typing import Dict, List
 
-num_directions = 49
+num_directions = 199
 #num_sparse_directions = 1
 num_polylearn_states = 1
-sample_size = 300
-experiment_name = "exp3"
+sample_size = 1000
+experiment_name = "exp4"
 
 def split_features_labels(df: pl.DataFrame):
     labels = df["Cluster_ID", "loss"]
@@ -33,7 +33,11 @@ validation = pl.read_parquet("data/rs_validation.parquet")
 clusters_parquet = pl.read_parquet("data/clusters.parquet")
 clusters_dict = dict(zip(clusters_parquet["cluster_id"], clusters_parquet["cluster_value"]))
 clusters = np.array([clusters_dict[cl_ind] for cl_ind in sorted(clusters_dict.keys())])
-num_classes = len(clusters)
+with open("data/cluster_quintiles.json") as q_file:
+    cluster_quantiles = json.load(q_file)["quantile_clusters"]
+num_classes = len(cluster_quantiles)
+inverse_quantiles = {int(cluster): int(quantile) for quantile, clusters in cluster_quantiles.items() for cluster in clusters}
+quantile_labels = train_labels["Cluster_ID"].replace_strict(inverse_quantiles).to_numpy()
 
 cont_dims = {col_ind for col_ind, col_name in enumerate(train_features.columns) if col_name.startswith("cont")}
 
@@ -83,11 +87,18 @@ def mean_average_error(test_params: npt.NDArray[np.float64], to_score: npt.NDArr
     mae = np.abs(response_subset.squeeze() - predictions).mean()
     return mae
 
+def accuracy(test_params: npt.NDArray[np.float64]):
+    reshaped_new_params = test_params.reshape((num_classes, -1))
+    poly_scores = train_features_np @ reshaped_new_params.transpose()
+    maximised = poly_scores.argmax(axis=1)
+    return np.equal(maximised, quantile_labels).sum() / len(maximised)
+
+
 def make_projection(params: npt.NDArray[np.float64], sampled_rows: npt.NDArray[np.float64]):
     print("Making projection")
     non_zeros = {}
     print(len(cont_dims))
-    for i in cont_dims:
+    for i in range(num_features):
         for image in sampled_rows:
             if image[i] != 0:
                 non_zeros[i] = non_zeros.get(i, 0) + 1
@@ -100,7 +111,7 @@ def make_projection(params: npt.NDArray[np.float64], sampled_rows: npt.NDArray[n
     cont_count = 0
     while added_dims < num_directions:
         non_zero_dir = non_zero_keys[np.random.randint(0, len(non_zero_keys))]
-        if not non_zero_dir in cont_dims:
+        if False:
             if non_zero_dir not in one_hots:
                 added_dims += 1
                 sparse_count += 1
@@ -137,10 +148,11 @@ def make_samples():
     samples = train.sample(sample_size)
     samples.write_parquet(f"{experiment_name}/samples.parquet")
     sampled_features, sampled_labels = split_features_labels(samples)
+    quantiled_labels = sampled_labels["Cluster_ID"].replace_strict(inverse_quantiles)
     rows_as_numpy = sampled_features.to_numpy()
-    return sampled_labels, rows_as_numpy
+    return quantiled_labels, rows_as_numpy
 
-def write_polytopes_file(projected: npt.NDArray[np.float64], labels: pl.DataFrame, iteration):
+def write_polytopes_file(projected: npt.NDArray[np.float64], labels: pl.Series, iteration):
     print("Writing polytope files")
     proj_dim = projected.shape[-1]
     with open(f"{experiment_name}/projected_dump.json", "w") as dump:
@@ -167,7 +179,9 @@ def write_polytopes_file(projected: npt.NDArray[np.float64], labels: pl.DataFram
     )
     pq.write_table(polytope_table, polytope_table_file(iteration))
 
-    labels.rename({"loss": "Response"}).write_parquet(labels_file(iteration))
+    #labels.rename({"loss": "Response"}).write_parquet(labels_file(iteration))
+    with open(labels_file(iteration), "w") as label_file:
+        json.dump(labels.to_list(), label_file)
 
 
 def update_params(iteration, projection):
@@ -182,7 +196,7 @@ def update_params(iteration, projection):
         print(projection.shape, new_params.shape)
         updated = projection @ new_params
         print("Computing MAE")
-        full_set_accuracy = mean_average_error(updated)
+        full_set_accuracy = accuracy(updated)
         print(full_set_accuracy)
         scored.append((full_set_accuracy, updated))
     scored.sort(key=lambda x: x[0])
@@ -206,10 +220,10 @@ def run_exectuable(iteration):
             "/tmp/deleteme.json",
             "--reverse-search-out",
             states_file(iteration),
-            "--responses",
+            "--labels",
             labels_file(iteration),
-            "--clusters", 
-            "data/clusters.parquet",
+            #"--clusters", 
+            #"data/clusters.parquet",
             "--num-states",
             str(num_polylearn_states)
         ]
@@ -224,7 +238,7 @@ def run_exectuable(iteration):
     cp.check_returncode()
 
 def log_iteration(params, iteration):
-    full_set_accuracy = mean_average_error(params)
+    full_set_accuracy = accuracy(params)
     timestamp = datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')
     with open(f"{experiment_name}/log.txt", "a") as log_file:
         print(f"{timestamp} Finished iteration {iteration} with accuracy {full_set_accuracy}", file=log_file)
@@ -245,7 +259,7 @@ except FileExistsError:
 
 
 
-#@retry(stop=stop_after_attempt(10))
+@retry(stop=stop_after_attempt(10))
 def do_iteration(i, params, prev_full_set_acc):
     print(f"Starting iteration {i}")
     sampled_labels, sampled_rows = make_samples()
@@ -253,7 +267,7 @@ def do_iteration(i, params, prev_full_set_acc):
     write_polytopes_file(projected, sampled_labels, i)
     run_exectuable(i)
     full_set_accuracy, updated_params = update_params(i, projection)
-    if full_set_accuracy < prev_full_set_acc:
+    if full_set_accuracy > prev_full_set_acc:
         params = updated_params
         prev_full_set_acc = full_set_accuracy
     else:
@@ -263,8 +277,8 @@ def do_iteration(i, params, prev_full_set_acc):
 
 print(f"Generating params {num_classes} by {len(cont_dims)}")
 dense_params = rng.standard_normal(size=[num_classes, len(cont_dims)], dtype="float64")
-params = np.concatenate([np.zeros([num_classes, input_size - len(cont_dims)], dtype="float64"), dense_params], axis=1)
-prev_full_set_acc = 99999.
+params = np.concatenate([0.1 * np.ones([num_classes, input_size - len(cont_dims)], dtype="float64"), dense_params], axis=1)
+prev_full_set_acc = 0.
 start_index = 0
 
 for i in range(start_index, 10000):
