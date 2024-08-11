@@ -17,7 +17,7 @@ num_directions = 49
 #num_sparse_directions = 1
 num_polylearn_states = 1
 sample_size = 300
-experiment_name = "exp3"
+experiment_name = "exp5"
 
 def split_features_labels(df: pl.DataFrame):
     labels = df["Cluster_ID", "loss"]
@@ -261,10 +261,9 @@ def do_iteration(i, params, prev_full_set_acc):
     log_iteration(params, i)
     return params, prev_full_set_acc
 
-print(f"Generating params {num_classes} by {len(cont_dims)}")
-dense_params = rng.standard_normal(size=[num_classes, len(cont_dims)], dtype="float64")
-params = np.concatenate([np.zeros([num_classes, input_size - len(cont_dims)], dtype="float64"), dense_params], axis=1)
-prev_full_set_acc = 99999.
+params = np.load("data/ridge_params.numpy.npy")
+prev_full_set_acc = mean_average_error(params)
+print(f"initial params have a score of {prev_full_set_acc}")
 start_index = 0
 
 for i in range(start_index, 10000):
