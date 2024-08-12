@@ -13,11 +13,11 @@ import datetime
 from tenacity import retry, stop_after_attempt
 from typing import Dict, List
 
-num_directions = 49
+num_directions = 99
 #num_sparse_directions = 1
-num_polylearn_states = 1
+num_polylearn_states = 10
 sample_size = 300
-experiment_name = "exp5"
+experiment_name = "exp6"
 
 def split_features_labels(df: pl.DataFrame):
     labels = df["Cluster_ID", "loss"]
@@ -87,7 +87,7 @@ def make_projection(params: npt.NDArray[np.float64], sampled_rows: npt.NDArray[n
     print("Making projection")
     non_zeros = {}
     print(len(cont_dims))
-    for i in cont_dims:
+    for i in range(input_size):
         for image in sampled_rows:
             if image[i] != 0:
                 non_zeros[i] = non_zeros.get(i, 0) + 1
@@ -98,9 +98,10 @@ def make_projection(params: npt.NDArray[np.float64], sampled_rows: npt.NDArray[n
     added_dims = 0
     sparse_count = 0
     cont_count = 0
+
     while added_dims < num_directions:
         non_zero_dir = non_zero_keys[np.random.randint(0, len(non_zero_keys))]
-        if not non_zero_dir in cont_dims:
+        if False: #not non_zero_dir in cont_dims:
             if non_zero_dir not in one_hots:
                 added_dims += 1
                 sparse_count += 1
