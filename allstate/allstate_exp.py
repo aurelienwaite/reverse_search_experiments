@@ -15,9 +15,9 @@ from typing import Dict, List
 
 num_directions = 99
 #num_sparse_directions = 1
-num_polylearn_states = 10
-sample_size = 300
-experiment_name = "exp6"
+num_polylearn_states = 1
+sample_size = 1000
+experiment_name = "exp7"
 
 def split_features_labels(df: pl.DataFrame):
     labels = df["Cluster_ID", "loss"]
@@ -218,7 +218,8 @@ def run_exectuable(iteration):
     print(" ".join(cmd))
     cp = subprocess.run(
         cmd,
-        capture_output=True
+        capture_output=True,
+        timeout = 60 * 10
     )
     print(cp.stdout.decode())
     print(cp.stderr.decode())
@@ -246,7 +247,7 @@ except FileExistsError:
 
 
 
-#@retry(stop=stop_after_attempt(10))
+@retry(stop=stop_after_attempt(100))
 def do_iteration(i, params, prev_full_set_acc):
     print(f"Starting iteration {i}")
     sampled_labels, sampled_rows = make_samples()
@@ -270,4 +271,4 @@ start_index = 0
 for i in range(start_index, 10000):
     with cProfile.Profile() as pr:
         params, prev_full_set_acc = do_iteration(i, params, prev_full_set_acc)
-        pr.dump_stats(f"{experiment_name}/stats_{i}.txt")
+        #pr.dump_stats(f"{experiment_name}/stats_{i}.txt")
