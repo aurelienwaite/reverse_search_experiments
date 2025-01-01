@@ -5,8 +5,6 @@ import numpy as np
 import json
 import pyarrow as pa
 import pyarrow.parquet as pq
-from scipy import sparse
-import matplotlib.pyplot as plt
 import subprocess
 from os import mkdir
 import cProfile

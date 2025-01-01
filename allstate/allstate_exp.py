@@ -10,14 +10,17 @@ from os import mkdir
 import cProfile
 import time
 import datetime
+from collections import defaultdict
+from scipy.sparse import bsr_array, coo_array
 from tenacity import retry, stop_after_attempt
+
 from typing import Dict, List
 
-num_directions = 99
+num_directions = 1
 #num_sparse_directions = 1
 num_polylearn_states = 1
-sample_size = 1000
-experiment_name = "exp7"
+sample_size = 10000
+experiment_name = "exp8"
 
 def split_features_labels(df: pl.DataFrame):
     labels = df["Cluster_ID", "loss"]
@@ -65,6 +68,11 @@ def labels_file(iteration):
 params_dir = f"{experiment_name}/params"
 mkdir(params_dir)
 
+rs_logs_dir = f"{experiment_name}/rs_logs"
+mkdir(rs_logs_dir)
+def rs_logs_file(iteration):
+    return f"{rs_logs_dir}/{iteration}.txt"
+
 def mean_average_error(test_params: npt.NDArray[np.float64], to_score: npt.NDArray[np.float64] = train_features_np, response_subset: npt.NDArray[np.float64] = response):
     reshaped_new_params = test_params.reshape((num_classes, -1))
     poly_scores = to_score @ reshaped_new_params.transpose()
@@ -94,44 +102,32 @@ def make_projection(params: npt.NDArray[np.float64], sampled_rows: npt.NDArray[n
     non_zero_keys = list(non_zeros.keys())
     print(f"There are {len(non_zero_keys)} non-zero cols")
     
-    one_hots = []
-    added_dims = 0
-    sparse_count = 0
-    cont_count = 0
+    directions = []
+    features_to_search = np.random.choice(np.array(non_zero_keys), size=[num_directions], replace=False)
+    for feature_ind in features_to_search:
+        rows = []
+        cols = []
+        data = []
+        for cluster in range(num_classes): 
+            rows.append(cluster)
+            cols.append(feature_ind)
+            data.append(1)
+            sparse_array = coo_array((np.array(data),(np.array(rows), np.array(cols))), shape=(num_classes, input_size), dtype="float64")
+            directions.append(sparse_array.tobsr())
 
-    while added_dims < num_directions:
-        non_zero_dir = non_zero_keys[np.random.randint(0, len(non_zero_keys))]
-        if False: #not non_zero_dir in cont_dims:
-            if non_zero_dir not in one_hots:
-                added_dims += 1
-                sparse_count += 1
-                for cluster in range(num_classes): 
-                    one_hot = non_zero_dir + cluster * input_size
-                    if one_hot not in one_hots:
-                        one_hots.append(one_hot)
-        else:
-            cluster = np.random.randint(0, num_classes)
-            one_hot = non_zero_dir + cluster * input_size
-            if one_hot not in one_hots:
-                added_dims += 1
-                cont_count +=1
-                one_hots.append(one_hot)
-
-    print(f"Added {added_dims} directions with {sparse_count} sparse and {cont_count} continious")
-    dir_shape = [len(one_hots), num_classes * input_size]
-    directions = np.zeros(dir_shape, dtype="float64")
-    for i, one_hot in enumerate(one_hots):
-        directions[i, one_hot] = 1.0
-    projection = np.concatenate([directions, params.reshape([1, -1])], axis=0)
-    with open(f"{experiment_name}/dir_samples.json", "a") as one_hots_file:
+    rows_t = sampled_rows.transpose()
+    projected = []
+    for direction in directions:
+        projected_dir = direction.dot(rows_t)
+        projected.append(coo_array(projected_dir.transpose()))
+    proj_params = params @ rows_t
+    projected.append(proj_params.transpose())
+    """with open(f"{experiment_name}/dir_samples.json", "a") as one_hots_file:
         print(json.dumps(one_hots), file=one_hots_file)
     with open(f"{experiment_name}/projection_dump.json", "w") as proj_file:
-        json.dump(projection.tolist(), proj_file, indent=2)
+        json.dump(projection.tolist(), proj_file, indent=2)"""
     # Because the feature vector is mostly sparse, we reshape our projection matrix
-    reshaped = projection.transpose().reshape([num_classes, input_size, -1])
-    print("Sampled rows shape", sampled_rows.shape)
-    projected = sampled_rows @ reshaped
-    return projected, reshaped
+    return projected, features_to_search
 
 def make_samples():
     print("Making samples")
@@ -141,11 +137,9 @@ def make_samples():
     rows_as_numpy = sampled_features.to_numpy()
     return sampled_labels, rows_as_numpy
 
-def write_polytopes_file(projected: npt.NDArray[np.float64], labels: pl.DataFrame, iteration):
+def write_polytopes_file(projected: List, labels: pl.DataFrame, iteration):
     print("Writing polytope files")
-    proj_dim = projected.shape[-1]
-    with open(f"{experiment_name}/projected_dump.json", "w") as dump:
-        json.dump(projected.tolist(), dump, indent=2)
+    """proj_dim = input_size
     polytopes = projected.transpose([1, 0, 2]).reshape([-1])
     polytope_dim = num_classes * proj_dim
     print(polytope_dim)
@@ -155,33 +149,74 @@ def write_polytopes_file(projected: npt.NDArray[np.float64], labels: pl.DataFram
     polytope_index = (
         np.arange(stop=polytope_dim * len(labels), dtype="i") // polytope_dim
     )
-    dim = np.tile(np.arange(stop=proj_dim, dtype="i"), len(labels) * num_classes)
+    dim = np.tile(np.arange(stop=proj_dim, dtype="i"), len(labels) * num_classes)"""
+    polytope_index = []
+    vertex_index = []
+    dim_index = []
+    value = []
 
-    print(len(polytope_index), len(vertex_index), len(dim), len(polytopes))
-    polytope_table = pa.table(
+    print(projected[0].shape)
+    print(len(projected))
+    expanded_directions = len(projected) - 1
+
+    dims_by_polytope = defaultdict(lambda: set())
+
+    for dim, direction in enumerate(projected[:-1]):
+        for polytope, vertex, datum in zip(direction.row, direction.col, direction.data):
+            polytope_index.append(polytope)
+            vertex_index.append(vertex)
+            dim_index.append(dim)
+            dims_by_polytope[polytope].add(dim)
+            value.append(datum)
+
+    param_dim = expanded_directions * num_classes + 1
+    for polytope in range(sample_size):
+        for vertex in range(num_classes):
+            polytope_index.append(polytope)
+            vertex_index.append(vertex)
+            dim_index.append(param_dim)
+            dims_by_polytope[polytope].add(dim)
+            value.append(projected[-1][polytope, vertex])
+
+    for p_ind in sorted(dims_by_polytope.keys()):
+        print(f"{p_ind}: {len(dims_by_polytope[p_ind])}")
+
+
+    print(len(polytope_index), len(vertex_index), len(dim_index), len(polytope_index))
+    schema = pa.schema([
+        pa.field("polytope", pa.int32()),
+        pa.field("vertex", pa.int32()),
+        pa.field("dim", pa.int32()),
+        pa.field("value", pa.float64())])
+    polytope_table = pa.Table.from_pydict(
         {
             "polytope": polytope_index,
             "vertex": vertex_index,
-            "dim": dim,
-            "value": polytopes,
-        }
+            "dim": dim_index,
+            "value": value,
+        },
+        schema=schema
     )
     pq.write_table(polytope_table, polytope_table_file(iteration))
 
     labels.rename({"loss": "Response"}).write_parquet(labels_file(iteration))
 
 
-def update_params(iteration, projection):
+def update_params(iteration, params: npt.NDArray[np.float64], projection: List[int]):
 
     states: npt.NDArray[np.float64] = pl.read_parquet(states_file(iteration) + ".parquet").to_numpy()
 
-    filtered: List[npt.NDArray[np.float64]] = [state for state in states if state[-1] > 0]
+    filtered: List[npt.NDArray[np.float64]] = [state / state[-1] for state in states if state[-1] > 0]
 
     scored = []
     for proj_param in filtered:
-        new_params = proj_param.reshape((-1, 1))
-        print(projection.shape, new_params.shape)
-        updated = projection @ new_params
+        updated = params.copy()
+        assert (len(proj_param) == len(projection) + 1), f"{len(proj_param)} vs {len(projection)}"
+        for axis, param in zip(projection, proj_param):
+            row = axis // input_size
+            col = axis % input_size
+            updated[row, col] += param
+
         print("Computing MAE")
         full_set_accuracy = mean_average_error(updated)
         print(full_set_accuracy)
@@ -219,10 +254,13 @@ def run_exectuable(iteration):
     cp = subprocess.run(
         cmd,
         capture_output=True,
-        timeout = 60 * 10
+        #timeout = 60 * 10
     )
-    print(cp.stdout.decode())
-    print(cp.stderr.decode())
+    logs = cp.stdout.decode() + cp.stderr.decode()
+    print(logs)
+    with open(rs_logs_file(iteration), "wt") as log_file:
+        print(" ".join(cmd), file=log_file)
+        print(logs, file=log_file)
     cp.check_returncode()
 
 def log_iteration(params, iteration):
@@ -254,7 +292,7 @@ def do_iteration(i, params, prev_full_set_acc):
     projected, projection = make_projection(params, sampled_rows)
     write_polytopes_file(projected, sampled_labels, i)
     run_exectuable(i)
-    full_set_accuracy, updated_params = update_params(i, projection)
+    full_set_accuracy, updated_params = update_params(i, params, projection)
     if full_set_accuracy < prev_full_set_acc:
         params = updated_params
         prev_full_set_acc = full_set_accuracy
